@@ -199,35 +199,60 @@ const sendMessage = async (cid: number, message: string) => {
 
 ### 📝 模型映射表 (Model Mapping)
 
-| 前端显示名称 (Frontend Name) | 后端/Agents 映射值 (Model ID) | 说明 |
+经过测试，以下模型可用：
+
+| 前端显示名称 | 后端映射值 | 状态 |
 | :--- | :--- | :--- |
-| `mimo-v2-flash` | `xiaomi/mimo-v2-flash:free` | 极速模型 |
-| `glm-4.5-air` | `z-ai/glm-4.5-air:free` | 通用模型 |
-| `qwen3-coder` | `qwen/qwen3-coder:free` | 代码能力强 |
-| `gpt-oss-120b` | `openai/gpt-oss-120b:free` | 强大的开源模型 |
+| `mimo-v2-flash` | `xiaomi/mimo-v2-flash:free` | ✅ 可用 |
+| `glm-4.5-air` | `z-ai/glm-4.5-air:free` | ✅ 可用 |
+| ~~`qwen3-coder`~~ | ~~`qwen/qwen3-coder:free`~~ | ❌ 超时 |
+| ~~`gpt-oss-120b`~~ | ~~`openai/gpt-oss-120b:free`~~ | ❌ 404 |
 
 ### 🛠️ 任务分工表
 
 | 角色 | 任务项 | 详细说明 | 状态 | 完成时间 |
 | :--- | :--- | :--- | :--- | :--- |
-| **Frontend** | **UI 更新** | 下拉框支持上述 4 种模型选择。 | ✅ Done | 2026-01-12 |
-| **Backend** | **参数透传** | `ChatSendRequest` 增加 `model` 字段 (Optional[str])，透传给 Agents 服务。 | ⏳ Pending | - |
-| **Agents** | **模型适配** | `ChatAgent` 支持接收 `model` 参数，并动态调用对应 LLM。 | ⏳ Pending | - |
+| **Backend** | **参数透传** | `ChatSendRequest` 增加 `model` 字段 (Optional[str])，透传给 Agents 服务。 | ✅ Done | 2026-01-14 |
+| **Backend** | **模型配置接口** | 新增 `GET /api/chat/models` 接口，返回可用模型列表供前端动态获取。 | ✅ Done | 2026-01-14 |
+| **Agents** | **模型适配** | `ChatAgent` 支持接收 `model` 参数，并动态调用对应 LLM。 | ✅ Done | 2026-01-14 |
+| **Agents** | **模型列表接口** | 新增 `GET /agent/chat/models` 接口，返回可用模型配置。 | ✅ Done | 2026-01-14 |
+| **Frontend** | **动态模型列表** | 从 `/api/chat/models` 获取模型列表，替代硬编码的下拉选项。 | ⏳ Pending | - |
 
 ### 🔧 详细技术要求 (Detailed Requirements)
 
-#### Backend
+#### Backend ✅
 - **Endpoint**: `POST /api/chat/send` 和 `POST /api/chat/send/stream`
 - **Request Body**: 增加可选字段 `model: str`
-- **Logic**: 接收前端传来的 `model` 值，直接透传给 Agents 服务接口 (`/agent/chat/stream` 或 `/agent/chat/completion`)
+- **Logic**: 接收前端传来的 `model` 值，直接透传给 Agents 服务接口
 
-#### Agents
+- **新增 Endpoint**: `GET /api/chat/models`
+- **Response**:
+  ```json
+  {
+    "models": [
+      {"id": "mimo-v2-flash", "name": "Mimo V2 Flash", "description": "小米极速模型，响应快速"},
+      {"id": "glm-4.5-air", "name": "GLM 4.5 Air", "description": "智谱通用模型，能力均衡"}
+    ],
+    "default": "mimo-v2-flash"
+  }
+  ```
+
+#### Agents ✅
 - **Endpoint**: `POST /agent/chat/stream` 和 `POST /agent/chat/completion`
 - **Request Body**: 增加可选字段 `model: str`
 - **Logic**:
   1. 接收 `model` 参数
-  2. 根据映射表将前端模型名转换为实际 Model ID（如 `mimo-v2-flash` -> `xiaomi/mimo-v2-flash:free`）
+  2. 根据映射表将前端模型名转换为实际 Model ID
   3. 调用 `llm_service.chat_completion` 时传入 `model` 参数
+
+- **新增 Endpoint**: `GET /agent/chat/models`
+- **Response**: 同上
+
+#### Frontend (⏳ 待实现)
+- 应用启动时调用 `GET /api/chat/models` 获取模型列表
+- 根据返回的 `models` 数组动态渲染下拉选项
+- 使用返回的 `default` 作为默认选中值
+- **好处**：当后端模型配置变更时，前端自动适配，无需修改代码
 
 ---
 
@@ -246,9 +271,9 @@ const sendMessage = async (cid: number, message: string) => {
 
 | 角色 | 任务项 | 详细说明 | 状态 | 完成时间 |
 | :--- | :--- | :--- | :--- | :--- |
-| **Backend** | **数据库设计** | 新增 `users` 表，更新 `conversations` 表关联 `user_id`。 | ⏳ Pending | - |
-| **Backend** | **认证接口** | 实现注册（需支持邮箱）、登录（需支持邮箱/用户名）、获取用户信息接口；集成 JWT 认证。 | ⏳ Pending | - |
-| **Backend** | **数据隔离** | 升级现有 Chat 接口，强制校验 Token 并按 `user_id` 过滤数据。 | ⏳ Pending | - |
+| **Backend** | **数据库设计** | 新增 `users` 表，更新 `conversations` 表关联 `user_id`。 | ✅ Done | 2026-01-14 |
+| **Backend** | **认证接口** | 实现注册（需支持邮箱）、登录（需支持邮箱/用户名）、获取用户信息接口；集成 JWT 认证。 | ✅ Done | 2026-01-14 |
+| **Backend** | **数据隔离** | 升级现有 Chat 接口，强制校验 Token 并按 `user_id` 过滤数据。 | ✅ Done | 2026-01-14 |
 | **Frontend** | **UI 组件** | 开发登录/注册模态框 (`AuthModal`)，改造 `UserProfile` 区域。 | ✅ Done | 2026-01-13 |
 | **Frontend** | **状态管理** | 实现 `AuthContext`，管理 Token 持久化、请求拦截器 (Interceptor)。 | ✅ Done | 2026-01-13 |
 | **Agents** | **上下文适配** | 支持接收 `user_id`，为未来个性化记忆 (Memory) 做准备。 | ⏳ Pending | - |

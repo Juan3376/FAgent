@@ -17,7 +17,7 @@ import os
 import time
 import httpx
 import asyncio
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -27,6 +27,7 @@ from ..core.context import set_context, get_context, ctx_logger as logger
 from ..core.logging import log_request, log_response, log_call_agents, log_store_message
 from ..services.session import session_manager
 from ..services.storage import message_storage
+from .auth import get_optional_user
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -94,6 +95,7 @@ class ChatSendRequest(BaseModel):
     temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = None
     history_limit: Optional[int] = None
+    model: Optional[str] = None  # 动态模型选择（如 mimo-v2-flash, glm-4.5-air）
 
 
 class ChatSendResponse(BaseModel):
@@ -242,6 +244,7 @@ async def chat_send_stream(request: ChatSendRequest):
         cid = request.cid
         user_message = request.user_message
         history_limit = request.history_limit
+        model = request.model
         
         async def generate():
             """SSE 事件生成器"""
@@ -256,6 +259,7 @@ async def chat_send_stream(request: ChatSendRequest):
                     "message_id": user_message_id,
                     "user_message": user_message,
                     "history_limit": history_limit,
+                    "model": model,
                 }
                 log_call_agents(
                     endpoint="/agent/chat/router/stream",
@@ -470,14 +474,24 @@ async def chat_send_router_stream(request: ChatSendRequest):
 # ==================== 会话管理接口 ====================
 
 @router.post("/session/create", response_model=CreateSessionResponse)
-async def create_session(request: CreateSessionRequest = None):
-    """创建新会话"""
+async def create_session(
+    request: CreateSessionRequest = None,
+    current_user: Optional[dict] = Depends(get_optional_user)
+):
+    """
+    创建新会话
+    
+    如果已登录，会话将关联到当前用户；否则创建匿名会话
+    """
     if request is None:
         request = CreateSessionRequest()
     
+    user_id = current_user["id"] if current_user else None
+    
     cid = session_manager.create_session(
         title=request.title,
-        metadata=request.metadata
+        metadata=request.metadata,
+        user_id=user_id
     )
     return CreateSessionResponse(cid=cid, title=request.title)
 
@@ -563,10 +577,50 @@ async def clear_conversation(cid: int):
 
 
 @router.get("/conversations")
-async def list_conversations(limit: Optional[int] = None, offset: int = 0):
-    """列出所有会话"""
-    conversations = session_manager.list_sessions(limit=limit, offset=offset)
+async def list_conversations(
+    limit: Optional[int] = None, 
+    offset: int = 0,
+    current_user: Optional[dict] = Depends(get_optional_user)
+):
+    """
+    列出会话
+    
+    如果已登录，只返回当前用户的会话；否则返回所有匿名会话（user_id=None）
+    """
+    user_id = current_user["id"] if current_user else None
+    conversations = session_manager.list_sessions(limit=limit, offset=offset, user_id=user_id)
     return {
         "conversations": conversations,
         "count": len(conversations)
     }
+
+
+# ==================== 模型配置接口 ====================
+
+@router.get("/models")
+async def get_available_models():
+    """
+    获取可用的 LLM 模型列表
+    
+    从 Agents 服务获取配置，前端根据返回动态渲染下拉框
+    
+    Returns:
+        {
+            "models": [{"id": "...", "name": "...", "description": "..."}],
+            "default": "默认模型ID"
+        }
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"{AGENTS_BASE_URL}/agent/chat/models")
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        logger.error(f"Failed to get models from Agents: {e}")
+        # 返回默认配置作为 fallback
+        return {
+            "models": [
+                {"id": "mimo-v2-flash", "name": "Mimo V2 Flash", "description": "默认模型"}
+            ],
+            "default": "mimo-v2-flash"
+        }

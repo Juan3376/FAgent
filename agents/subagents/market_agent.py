@@ -151,13 +151,15 @@ class MarketSubAgent(BaseSubAgent):
             }
         ]
         
-        # 3. 流式调用 LLM 生成分析
-        log_subagent.llm_call(model="deepseek", messages_count=len(messages), temperature=0.7)
+        # 3. 流式调用 LLM 生成分析（使用动态模型）
+        model = context.model
+        log_subagent.llm_call(model=model or "default", messages_count=len(messages), temperature=0.7)
         
         chunk_count = 0
         for chunk in self.llm.chat_completion_stream(
             messages=messages,
             temperature=0.7,
+            model=model,
         ):
             chunk_count += 1
             yield chunk

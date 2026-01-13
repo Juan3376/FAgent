@@ -18,7 +18,7 @@ import json
 import asyncio
 
 from ..services.chat_agent import chat_agent
-from ..services.llm import llm_service
+from ..services.llm import llm_service, AVAILABLE_MODELS
 from ..core.prompts import DEFAULT_SYSTEM_PROMPT
 from ..core.context import set_context
 from ..router import main_router
@@ -156,6 +156,7 @@ class RouterChatRequest(BaseModel):
     message_id: int                   # 当前消息 ID（用于获取历史）
     user_message: str                 # 用户消息
     history_limit: Optional[int] = 10 # 历史消息限制
+    model: Optional[str] = None       # 动态模型选择（如 mimo-v2-flash, glm-4.5-air）
 
 
 class RouterChatResponse(BaseModel):
@@ -188,6 +189,7 @@ async def router_chat_stream(request: RouterChatRequest):
                     message_id=request.message_id,
                     user_message=request.user_message,
                     history_limit=request.history_limit or 10,
+                    model=request.model,
                 ):
                     data = json.dumps({"content": chunk}, ensure_ascii=False)
                     yield f"data: {data}\n\n"
@@ -230,4 +232,20 @@ async def router_chat_completion(request: RouterChatRequest):
         return RouterChatResponse(content=content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 模型配置接口 ====================
+
+@router.get("/models")
+async def get_available_models():
+    """
+    获取可用的模型列表
+    
+    Returns:
+        List[dict]: 可用模型列表，每个模型包含 id, name, description
+    """
+    return {
+        "models": AVAILABLE_MODELS,
+        "default": AVAILABLE_MODELS[0]["id"] if AVAILABLE_MODELS else None
+    }
 

@@ -48,6 +48,7 @@ class TaskContext:
     # 原始信息（可选，用于调试）
     original_message: str = ""                    # 原始用户消息
     cid: Optional[int] = None                     # 会话 ID
+    model: Optional[str] = None                   # 动态模型选择
     
     def to_dict(self) -> dict:
         return {
@@ -57,6 +58,7 @@ class TaskContext:
             "context_summary": self.context_summary,
             "original_message": self.original_message,
             "cid": self.cid,
+            "model": self.model,
         }
     
     @classmethod
@@ -68,6 +70,7 @@ class TaskContext:
             context_summary=data.get("context_summary", ""),
             original_message=data.get("original_message", ""),
             cid=data.get("cid"),
+            model=data.get("model"),
         )
 
 

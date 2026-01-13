@@ -100,6 +100,7 @@ class MainRouter:
         message_id: int,
         user_message: str,
         history_limit: int = 10,
+        model: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """
         处理用户消息（流式）- 系统主入口
@@ -109,6 +110,7 @@ class MainRouter:
             message_id: 当前消息 ID（用于获取历史）
             user_message: 用户消息
             history_limit: 历史消息条数限制
+            model: 动态模型选择（可选）
             
         Yields:
             流式文本片段
@@ -138,6 +140,7 @@ class MainRouter:
         # 4. 设置上下文的原始信息
         decision.task_context.original_message = user_message
         decision.task_context.cid = cid
+        decision.task_context.model = model
         
         # 记录上下文和分发
         log_router.context(decision.task_context)

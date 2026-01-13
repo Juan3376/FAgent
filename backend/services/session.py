@@ -33,7 +33,8 @@ class SessionManager:
     def create_session(
         self,
         title: Optional[str] = None,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        user_id: Optional[int] = None
     ) -> int:
         """
         创建新会话
@@ -41,12 +42,13 @@ class SessionManager:
         Args:
             title: 会话标题（可选）
             metadata: 会话元数据（可选）
+            user_id: 用户ID（可选，用于数据隔离）
         
         Returns:
             cid（整数）
         """
-        cid = message_storage.create_conversation(title=title, metadata=metadata)
-        logger.info(f"SessionManager: 会话创建 | cid={cid} | title={title}")
+        cid = message_storage.create_conversation(title=title, metadata=metadata, user_id=user_id)
+        logger.info(f"SessionManager: 会话创建 | cid={cid} | user_id={user_id} | title={title}")
         return cid
     
     def update_session_title(self, cid: int, title: str) -> bool:
@@ -170,9 +172,34 @@ class SessionManager:
         """删除会话及其所有消息"""
         return message_storage.delete_conversation(cid)
     
-    def list_sessions(self, limit: Optional[int] = None, offset: int = 0) -> List[Dict]:
-        """列出所有会话"""
-        return message_storage.list_conversations(limit=limit, offset=offset)
+    def list_sessions(
+        self, 
+        limit: Optional[int] = None, 
+        offset: int = 0,
+        user_id: Optional[int] = None
+    ) -> List[Dict]:
+        """
+        列出会话
+        
+        Args:
+            limit: 返回条数限制
+            offset: 偏移量
+            user_id: 用户ID（可选，用于数据隔离）
+        """
+        return message_storage.list_conversations(limit=limit, offset=offset, user_id=user_id)
+    
+    def check_conversation_owner(self, cid: int, user_id: int) -> bool:
+        """
+        检查会话是否属于指定用户
+        
+        Args:
+            cid: 会话ID
+            user_id: 用户ID
+            
+        Returns:
+            是否属于该用户
+        """
+        return message_storage.check_conversation_owner(cid, user_id)
 
 
 # 全局会话管理器实例

@@ -44,7 +44,7 @@ class MessageStorage:
     """消息存储服务"""
     
     # 数据库版本，用于迁移
-    DB_VERSION = 4  # 升级版本：新增 title 字段
+    DB_VERSION = 5  # 升级版本：新增 users 表，conversations 表关联 user_id
     
     def __init__(self, db_path: str = "data/conversations.db"):
         """初始化存储服务"""
@@ -78,15 +78,28 @@ class MessageStorage:
     
     def _create_tables(self, cursor):
         """创建数据库表（使用自增 ID）"""
-        # 会话表：cid 自增
+        # 用户表：新增
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        
+        # 会话表：cid 自增，关联 user_id
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS conversations (
                 cid INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
                 title TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 metadata TEXT,
-                system_message TEXT
+                system_message TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id)
             )
         """)
         
@@ -107,8 +120,11 @@ class MessageStorage:
         # 索引
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_cid ON messages(cid)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_id_cid ON messages(message_id, cid)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
         
-        logger.info("数据库表创建完成（自增 ID 模式）")
+        logger.info("数据库表创建完成（自增 ID 模式，含用户表）")
     
     @staticmethod
     def _detect_content_type(content: Union[str, List, Dict]) -> str:
@@ -146,7 +162,8 @@ class MessageStorage:
     def create_conversation(
         self,
         title: Optional[str] = None,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        user_id: Optional[int] = None
     ) -> int:
         """
         创建新会话
@@ -154,6 +171,7 @@ class MessageStorage:
         Args:
             title: 会话标题（可选）
             metadata: 会话元数据（可选）
+            user_id: 用户ID（可选，用于数据隔离）
         
         Returns:
             cid (整数)
@@ -166,14 +184,14 @@ class MessageStorage:
         
         try:
             cursor.execute("""
-                INSERT INTO conversations (title, created_at, updated_at, metadata)
-                VALUES (?, ?, ?, ?)
-            """, (title, now, now, metadata_json))
+                INSERT INTO conversations (user_id, title, created_at, updated_at, metadata)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, title, now, now, metadata_json))
             
             cid = cursor.lastrowid
             
             conn.commit()
-            logger.info(f"会话创建成功 | cid={cid} | title={title}")
+            logger.info(f"会话创建成功 | cid={cid} | user_id={user_id} | title={title}")
             return cid
         except Exception as e:
             logger.error(f"会话创建失败 | error={str(e)}")
@@ -189,7 +207,7 @@ class MessageStorage:
         
         try:
             cursor.execute("""
-                SELECT cid, title, created_at, updated_at, metadata
+                SELECT cid, user_id, title, created_at, updated_at, metadata
                 FROM conversations WHERE cid = ?
             """, (cid,))
             
@@ -206,6 +224,7 @@ class MessageStorage:
             
             return {
                 "cid": row["cid"],
+                "user_id": row["user_id"],
                 "title": row["title"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
@@ -270,23 +289,42 @@ class MessageStorage:
         finally:
             conn.close()
     
-    def list_conversations(self, limit: Optional[int] = None, offset: int = 0) -> List[Dict]:
-        """列出所有会话"""
+    def list_conversations(
+        self, 
+        limit: Optional[int] = None, 
+        offset: int = 0,
+        user_id: Optional[int] = None
+    ) -> List[Dict]:
+        """
+        列出会话
+        
+        Args:
+            limit: 返回条数限制
+            offset: 偏移量
+            user_id: 用户ID（可选，用于数据隔离）
+        """
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
         try:
+            # 构建查询
             query = """
-                SELECT c.cid, c.title, c.created_at, c.updated_at, c.metadata,
+                SELECT c.cid, c.user_id, c.title, c.created_at, c.updated_at, c.metadata,
                        COUNT(m.message_id) as message_count
                 FROM conversations c
                 LEFT JOIN messages m ON c.cid = m.cid
-                GROUP BY c.cid
-                ORDER BY c.updated_at DESC
             """
             
             params: List[Any] = []
+            
+            # 按 user_id 过滤
+            if user_id is not None:
+                query += " WHERE c.user_id = ?"
+                params.append(user_id)
+            
+            query += " GROUP BY c.cid ORDER BY c.updated_at DESC"
+            
             if limit:
                 query += " LIMIT ? OFFSET ?"
                 params.extend([limit, offset])
@@ -305,6 +343,7 @@ class MessageStorage:
                 
                 conversations.append({
                     "cid": row["cid"],
+                    "user_id": row["user_id"],
                     "title": row["title"],
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
@@ -575,6 +614,144 @@ class MessageStorage:
             return True
         finally:
             conn.close()
+
+
+    # ==================== 用户操作 ====================
+    
+    def create_user(
+        self,
+        username: str,
+        email: str,
+        password_hash: str
+    ) -> int:
+        """
+        创建新用户
+        
+        Args:
+            username: 用户名（唯一）
+            email: 邮箱（唯一）
+            password_hash: 密码哈希
+        
+        Returns:
+            user_id (整数)
+        """
+        now = datetime.now().isoformat()
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                INSERT INTO users (username, email, password_hash, created_at)
+                VALUES (?, ?, ?, ?)
+            """, (username, email, password_hash, now))
+            
+            user_id = cursor.lastrowid
+            
+            conn.commit()
+            logger.info(f"用户创建成功 | user_id={user_id} | username={username}")
+            return user_id
+        except sqlite3.IntegrityError as e:
+            logger.warning(f"用户创建失败（重复） | username={username} | email={email} | error={str(e)}")
+            raise ValueError("用户名或邮箱已存在")
+        except Exception as e:
+            logger.error(f"用户创建失败 | error={str(e)}")
+            raise
+        finally:
+            conn.close()
+    
+    def get_user_by_id(self, user_id: int) -> Optional[Dict]:
+        """根据 ID 获取用户信息"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                SELECT id, username, email, created_at
+                FROM users WHERE id = ?
+            """, (user_id,))
+            
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            
+            return {
+                "id": row["id"],
+                "username": row["username"],
+                "email": row["email"],
+                "created_at": row["created_at"]
+            }
+        finally:
+            conn.close()
+    
+    def get_user_by_username(self, username: str) -> Optional[Dict]:
+        """根据用户名获取用户信息（含密码哈希，用于登录验证）"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                SELECT id, username, email, password_hash, created_at
+                FROM users WHERE username = ?
+            """, (username,))
+            
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            
+            return {
+                "id": row["id"],
+                "username": row["username"],
+                "email": row["email"],
+                "password_hash": row["password_hash"],
+                "created_at": row["created_at"]
+            }
+        finally:
+            conn.close()
+    
+    def get_user_by_email(self, email: str) -> Optional[Dict]:
+        """根据邮箱获取用户信息（含密码哈希，用于登录验证）"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                SELECT id, username, email, password_hash, created_at
+                FROM users WHERE email = ?
+            """, (email,))
+            
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            
+            return {
+                "id": row["id"],
+                "username": row["username"],
+                "email": row["email"],
+                "password_hash": row["password_hash"],
+                "created_at": row["created_at"]
+            }
+        finally:
+            conn.close()
+    
+    def check_conversation_owner(self, cid: int, user_id: int) -> bool:
+        """
+        检查会话是否属于指定用户
+        
+        Args:
+            cid: 会话ID
+            user_id: 用户ID
+            
+        Returns:
+            是否属于该用户
+        """
+        conversation = self.get_conversation(cid)
+        if conversation is None:
+            return False
+        return conversation.get("user_id") == user_id
 
 
 # 全局存储实例

@@ -66,14 +66,16 @@ class ChatSubAgent(BaseSubAgent):
         # 构建消息
         messages = self._build_messages(context)
         
-        # 记录 LLM 调用
-        log_subagent.llm_call(model="deepseek", messages_count=len(messages), temperature=0.7)
+        # 记录 LLM 调用（使用动态模型）
+        model = context.model
+        log_subagent.llm_call(model=model or "default", messages_count=len(messages), temperature=0.7)
         
-        # 流式调用 LLM
+        # 流式调用 LLM（传递 model 参数）
         chunk_count = 0
         for chunk in self.llm.chat_completion_stream(
             messages=messages,
             temperature=0.7,
+            model=model,
         ):
             chunk_count += 1
             yield chunk
@@ -92,10 +94,11 @@ class ChatSubAgent(BaseSubAgent):
         # 构建消息
         messages = self._build_messages(context)
         
-        # 非流式调用 LLM
+        # 非流式调用 LLM（传递 model 参数）
         response = self.llm.chat_completion(
             messages=messages,
             temperature=0.7,
+            model=context.model,
         )
         
         return response.choices[0].message.content
